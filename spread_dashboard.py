@@ -15,58 +15,87 @@ volume_threshold = st.sidebar.slider("📊 거래량 기준 (USDT)", 0, 10_000_0
 refresh_interval = st.sidebar.slider("⏱️ 갱신 주기 (초)", 1, 30, 5)
 st_autorefresh(interval=refresh_interval * 1000, key="refresh")
 
-# 기본 탭을 '실시간 가격 리스트'로
 tab_options = ["📈 스프레드 차트", "💰 실시간 가격 리스트"]
 selected_tab = st.radio("탭 선택", tab_options, horizontal=True, index=1)
 
-# 캐시 API
+# 캐싱 함수들 (예외 처리 포함)
 @st.cache_data(ttl=30)
 def get_binance_futures_symbols():
-    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
-    r = requests.get(url)
-    data = r.json()
-    return set(
-        item['symbol']
-        for item in data['symbols']
-        if item.get("contractType") == "PERPETUAL"
-        and item.get("quoteAsset") == "USDT"
-        and item.get("status") == "TRADING"
-    )
+    try:
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        return set(
+            item['symbol']
+            for item in data.get('symbols', [])
+            if item.get("contractType") == "PERPETUAL"
+            and item.get("quoteAsset") == "USDT"
+            and item.get("status") == "TRADING"
+        )
+    except Exception as e:
+        st.error(f"❌ Binance 심볼 정보를 불러올 수 없습니다: {e}")
+        return set()
 
 @st.cache_data(ttl=30)
 def get_binance_prices():
-    url = "https://fapi.binance.com/fapi/v1/ticker/price"
-    r = requests.get(url)
-    return {item['symbol']: float(item['price']) for item in r.json()}
+    try:
+        url = "https://fapi.binance.com/fapi/v1/ticker/price"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return {item['symbol']: float(item['price']) for item in r.json()}
+    except Exception as e:
+        st.error(f"❌ Binance 가격 정보를 불러올 수 없습니다: {e}")
+        return {}
 
 @st.cache_data(ttl=30)
 def get_bybit_prices():
-    url = "https://api.bybit.com/v5/market/tickers?category=linear"
-    r = requests.get(url)
-    data = r.json()['result']['list']
-    return {item['symbol']: float(item['lastPrice']) for item in data}, set(item['symbol'] for item in data)
+    try:
+        url = "https://api.bybit.com/v5/market/tickers?category=linear"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json().get('result', {}).get('list', [])
+        return {item['symbol']: float(item['lastPrice']) for item in data}, set(item['symbol'] for item in data)
+    except Exception as e:
+        st.error(f"❌ Bybit 가격 정보를 불러올 수 없습니다: {e}")
+        return {}, set()
 
 @st.cache_data(ttl=30)
 def get_binance_24h_volume():
-    url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-    r = requests.get(url)
-    return {item['symbol']: float(item['quoteVolume']) for item in r.json()}
+    try:
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return {item['symbol']: float(item['quoteVolume']) for item in r.json()}
+    except Exception as e:
+        st.error(f"❌ Binance 거래량 정보를 불러올 수 없습니다: {e}")
+        return {}
 
 @st.cache_data(ttl=30)
 def get_binance_funding_rates():
-    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
-    r = requests.get(url)
-    return {item["symbol"]: float(item["lastFundingRate"]) * 100 for item in r.json()}
+    try:
+        url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return {item["symbol"]: float(item["lastFundingRate"]) * 100 for item in r.json()}
+    except Exception as e:
+        st.error(f"❌ Binance 펀딩피 정보를 불러올 수 없습니다: {e}")
+        return {}
 
 @st.cache_data(ttl=30)
 def get_bybit_funding_rates():
-    url = "https://api.bybit.com/v5/market/tickers?category=linear"
-    r = requests.get(url)
-    data = r.json()["result"]["list"]
-    return {
-        item["symbol"]: float(item["fundingRate"]) * 100
-        for item in data if item.get("fundingRate") not in (None, '', 'null')
-    }
+    try:
+        url = "https://api.bybit.com/v5/market/tickers?category=linear"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json().get("result", {}).get("list", [])
+        return {
+            item["symbol"]: float(item["fundingRate"]) * 100
+            for item in data if item.get("fundingRate") not in (None, '', 'null')
+        }
+    except Exception as e:
+        st.error(f"❌ Bybit 펀딩피 정보를 불러올 수 없습니다: {e}")
+        return {}
 
 # 세션 상태 초기화
 if "chart_data" not in st.session_state:
@@ -87,7 +116,7 @@ common_symbols = [
     if s in binance_prices and s in bybit_prices and binance_volumes.get(s, 0) >= volume_threshold
 ]
 
-# 스프레드 및 펀딩 데이터 계산
+# 스프레드 계산
 spread_list = []
 for symbol in common_symbols:
     b_price = binance_prices[symbol]
@@ -108,9 +137,7 @@ for symbol in common_symbols:
 spread_list = sorted(spread_list, key=lambda x: x["spread_pct"], reverse=True)
 top_spreads = spread_list[:12]
 
-# ----------------------------------------------------
-# 📈 탭 1: 스프레드 차트
-# ----------------------------------------------------
+# 📈 차트 탭
 if selected_tab == "📈 스프레드 차트":
     for i in range(0, len(top_spreads), 3):
         row = st.columns(3)
@@ -135,10 +162,8 @@ if selected_tab == "📈 스프레드 차트":
                     st.markdown(f"### <span style='font-size:18px'>{symbol}</span>", unsafe_allow_html=True)
                     st.markdown(
                         f"<span style='font-size:14px'>"
-                        f"Binance: ${binance_price:,.2f}    <vs>  "
-                        f"Bybit: ${bybit_price:,.2f}<br>"
-                        f"차이: ${spread:,.2f}<br>"
-                        f"차이율: {spread_pct:.4f}%"
+                        f"Binance: ${binance_price:,.2f} <br>Bybit: ${bybit_price:,.2f}<br>"
+                        f"차이: ${spread:,.2f}<br>차이율: {spread_pct:.4f}%"
                         f"</span>", unsafe_allow_html=True
                     )
 
@@ -154,9 +179,7 @@ if selected_tab == "📈 스프레드 차트":
                     if spread_pct > spread_threshold:
                         st.error(f"🚨 {symbol} 스프레드 {spread_pct:.4f}% 초과!")
 
-# ----------------------------------------------------
-# 💰 탭 2: 실시간 가격 리스트
-# ----------------------------------------------------
+# 💰 가격 리스트 탭
 elif selected_tab == "💰 실시간 가격 리스트":
     st.markdown("### 💵 실시간 가격 비교 (Binance vs Bybit)")
     filtered = [item for item in spread_list if item['spread_pct'] >= spread_threshold]
